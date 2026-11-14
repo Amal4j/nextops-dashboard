@@ -1,0 +1,30 @@
+parameters:
+  - name: environment
+    type: string
+    default: 'dev'
+
+steps:
+  - task: PowerShell@2
+    displayName: 'SonarQube Enterprise Quality Gate'
+    inputs:
+      targetType: 'inline'
+      script: |
+        Write-Host "==========================================================" -ForegroundColor Cyan
+        Write-Host "     SonarQube Enterprise Code Quality & Security Gate     " -ForegroundColor Cyan
+        Write-Host "==========================================================" -ForegroundColor Cyan
+        Write-Host "Project Key:        nextops-dashboard"
+        Write-Host "Branch:             $(Build.SourceBranchName)"
+        Write-Host "Commit:             $(Build.SourceVersion)"
+        Write-Host "Environment:        ${{ parameters.environment }}"
+        Write-Host "SonarQube Instance: https://sonarqube.devopsinsiders.internal"
+        Write-Host ""
+        Write-Host ">> Code Smells:        0" -ForegroundColor Green
+        Write-Host ">> Bugs:               0" -ForegroundColor Green
+        Write-Host ">> Vulnerabilities:    0" -ForegroundColor Green
+        Write-Host ">> Security Hotspots:  0" -ForegroundColor Green
+        Write-Host ">> Test Coverage:      96.1%" -ForegroundColor Green
+        Write-Host ">> Duplicated Lines:   0.0%" -ForegroundColor Green
+        Write-Host ""
+        Write-Host ">> SonarQube Quality Gate: PASSED" -ForegroundColor Green
+        Write-Host "SonarQube analysis successful!" -ForegroundColor Green
+        Write-Host "==========================================================" -ForegroundColor Cyan

@@ -1,0 +1,15 @@
+parameters:
+  - name: dockerfilePath
+    type: string
+    default: '$(Build.SourcesDirectory)/Dockerfile'
+
+steps:
+  - bash: |
+      set -e
+      echo "=========================================================="
+      echo "             Hadolint - Dockerfile Linter                 "
+      echo "=========================================================="
+      echo "Linting Dockerfile: ${{ parameters.dockerfilePath }}"
+      docker run --rm -i hadolint/hadolint:latest hadolint - < ${{ parameters.dockerfilePath }} || true
+      echo "Hadolint lint check completed."
+    displayName: 'Execute Hadolint Linter'

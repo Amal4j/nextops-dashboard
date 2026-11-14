@@ -1,0 +1,188 @@
+parameters:
+  - name: environment
+    type: string
+    default: 'dev'
+  - name: azureServiceConnection
+    type: string
+    default: 'NextOps-Azure-Connection'
+  - name: acrName
+    type: string
+    default: 'acrnextopsdev'
+  - name: acrLoginServer
+    type: string
+    default: 'acrnextopsdev.azurecr.io'
+  - name: imageRepository
+    type: string
+    default: 'nextops-dashboard'
+  - name: dockerfilePath
+    type: string
+    default: '$(Build.SourcesDirectory)/Dockerfile'
+  - name: run_hadolint
+    type: boolean
+    default: true
+  - name: run_eslint
+    type: boolean
+    default: true
+  - name: run_sonarqube
+    type: boolean
+    default: true
+  - name: run_npm_audit
+    type: boolean
+    default: true
+  - name: run_gitleaks
+    type: boolean
+    default: true
+  - name: run_trivy
+    type: boolean
+    default: true
+  - name: run_docker_push
+    type: boolean
+    default: true
+  - name: run_gitops_update
+    type: boolean
+    default: false
+  - name: gitopsRepoName
+    type: string
+    default: 'NextOps Industrial/nextops-gitops'
+
+stages:
+  # -------------------------------------------------------------
+  # Stage 1: Dockerfile Linting (Hadolint)
+  # -------------------------------------------------------------
+  - stage: Hadolint_${{ parameters.environment }}
+    displayName: '1. Linting - Hadolint (${{ parameters.environment }})'
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_hadolint }}', true))
+    jobs:
+      - job: HadolintJob
+        displayName: 'Hadolint Dockerfile Linter'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/hadolint-step.yml
+            parameters:
+              dockerfilePath: ${{ parameters.dockerfilePath }}
+
+  # -------------------------------------------------------------
+  # Stage 2: Frontend Code Linting & Style (ESLint)
+  # -------------------------------------------------------------
+  - stage: ESLint_${{ parameters.environment }}
+    displayName: '2. Linting - ESLint (${{ parameters.environment }})'
+    dependsOn: Hadolint_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_eslint }}', true))
+    jobs:
+      - job: ESLintJob
+        displayName: 'ESLint Code Analysis'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/eslint-step.yml
+
+  # -------------------------------------------------------------
+  # Stage 3: SAST - SonarQube Enterprise Gate
+  # -------------------------------------------------------------
+  - stage: SonarQube_${{ parameters.environment }}
+    displayName: '3. SAST - SonarQube (${{ parameters.environment }})'
+    dependsOn: ESLint_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_sonarqube }}', true))
+    jobs:
+      - job: SonarQubeJob
+        displayName: 'SonarQube Quality Gate'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: ../steps/sonarqube-step.yml
+            parameters:
+              environment: ${{ parameters.environment }}
+
+  # -------------------------------------------------------------
+  # Stage 4: SCA - Dependency Vulnerability Scan (npm audit)
+  # -------------------------------------------------------------
+  - stage: NpmAuditSCA_${{ parameters.environment }}
+    displayName: '4. SCA - Dependency Audit (${{ parameters.environment }})'
+    dependsOn: SonarQube_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_npm_audit }}', true))
+    jobs:
+      - job: NpmAuditJob
+        displayName: 'npm audit SCA Scanner'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/npm-audit-step.yml
+
+  # -------------------------------------------------------------
+  # Stage 5: Secret Scanning (Gitleaks)
+  # -------------------------------------------------------------
+  - stage: Gitleaks_${{ parameters.environment }}
+    displayName: '5. Secrets - Gitleaks (${{ parameters.environment }})'
+    dependsOn: NpmAuditSCA_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_gitleaks }}', true))
+    jobs:
+      - job: GitleaksJob
+        displayName: 'Gitleaks Secret Audit'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/gitleaks-step.yml
+
+  # -------------------------------------------------------------
+  # Stage 6: Container Vulnerability Scan (Trivy)
+  # -------------------------------------------------------------
+  - stage: TrivyScan_${{ parameters.environment }}
+    displayName: '6. Container Security - Trivy (${{ parameters.environment }})'
+    dependsOn: Gitleaks_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_trivy }}', true))
+    jobs:
+      - job: TrivyJob
+        displayName: 'Trivy Container CVE Audit'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/trivy-step.yml
+            parameters:
+              dockerfilePath: ${{ parameters.dockerfilePath }}
+
+  # -------------------------------------------------------------
+  # Stage 7: Docker Build & Push to Azure Container Registry
+  # -------------------------------------------------------------
+  - stage: DockerBuildPush_${{ parameters.environment }}
+    displayName: '7. Build & Push to ACR (${{ parameters.environment }})'
+    dependsOn: TrivyScan_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_docker_push }}', true))
+    jobs:
+      - job: BuildAndPushJob
+        displayName: 'Build Image & Push to ${{ parameters.acrLoginServer }}'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+          - template: ../steps/docker-build-push-step.yml
+            parameters:
+              azureServiceConnection: ${{ parameters.azureServiceConnection }}
+              acrName: ${{ parameters.acrName }}
+              acrLoginServer: ${{ parameters.acrLoginServer }}
+              imageRepository: ${{ parameters.imageRepository }}
+              dockerfilePath: ${{ parameters.dockerfilePath }}
+              environment: ${{ parameters.environment }}
+
+  # -------------------------------------------------------------
+  # Stage 8: Update GitOps Deployment Manifest
+  # -------------------------------------------------------------
+  - stage: UpdateGitOps_${{ parameters.environment }}
+    displayName: '8. GitOps - Update Manifest (${{ parameters.environment }})'
+    dependsOn: DockerBuildPush_${{ parameters.environment }}
+    condition: and(not(failed()), not(canceled()), eq('${{ parameters.run_gitops_update }}', true))
+    jobs:
+      - job: UpdateManifest
+        displayName: 'Update deployment.yaml with $(Build.BuildId)'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: ../steps/gitops-sync-step.yml
+            parameters:
+              acrLoginServer: ${{ parameters.acrLoginServer }}
+              imageRepository: ${{ parameters.imageRepository }}

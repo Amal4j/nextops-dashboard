@@ -1,0 +1,75 @@
+parameters:
+  - name: azureServiceConnection
+    type: string
+  - name: acrName
+    type: string
+  - name: acrLoginServer
+    type: string
+  - name: imageRepository
+    type: string
+  - name: dockerfilePath
+    type: string
+  - name: environment
+    type: string
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Authenticate with Azure Container Registry'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      inlineScript: |
+        echo "Authenticating Docker with ACR: ${{ parameters.acrName }}..."
+        az acr login --name ${{ parameters.acrName }}
+
+  - bash: |
+      set -e
+      IMAGE_TAG_BUILD="${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}:$(Build.BuildId)"
+      IMAGE_TAG_LATEST="${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}:latest"
+
+      echo "=========================================================="
+      echo "               Docker Build & Push to ACR                 "
+      echo "=========================================================="
+      echo "Building image: $IMAGE_TAG_BUILD"
+      docker build \
+        -t "$IMAGE_TAG_BUILD" \
+        -t "$IMAGE_TAG_LATEST" \
+        -f ${{ parameters.dockerfilePath }} \
+        .
+
+      echo "Pushing image tag: $IMAGE_TAG_BUILD"
+      docker push "$IMAGE_TAG_BUILD"
+
+      echo "Pushing image tag: $IMAGE_TAG_LATEST"
+      docker push "$IMAGE_TAG_LATEST"
+
+      echo "Image successfully published to ${{ parameters.acrLoginServer }}"
+    displayName: 'Build & Push Docker Image'
+
+  - bash: |
+      mkdir -p $(Build.ArtifactStagingDirectory)
+      IMAGE_TAG_BUILD="${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}:$(Build.BuildId)"
+      DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_TAG_BUILD" 2>/dev/null || echo "$IMAGE_TAG_BUILD")
+
+      cat <<EOF > $(Build.ArtifactStagingDirectory)/image-metadata.json
+      {
+        "repository": "${{ parameters.imageRepository }}",
+        "registry": "${{ parameters.acrLoginServer }}",
+        "tag": "$(Build.BuildId)",
+        "fullImage": "$IMAGE_TAG_BUILD",
+        "digest": "$DIGEST",
+        "buildId": "$(Build.BuildId)",
+        "commit": "$(Build.SourceVersion)",
+        "environment": "${{ parameters.environment }}"
+      }
+      EOF
+      cat $(Build.ArtifactStagingDirectory)/image-metadata.json
+    displayName: 'Generate Container Image Metadata'
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish Image Metadata Artifact'
+    inputs:
+      targetPath: '$(Build.ArtifactStagingDirectory)/image-metadata.json'
+      artifact: 'image_metadata_${{ parameters.environment }}'
+      publishLocation: 'pipeline'

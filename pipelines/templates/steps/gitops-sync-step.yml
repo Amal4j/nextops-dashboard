@@ -1,0 +1,66 @@
+parameters:
+  - name: acrLoginServer
+    type: string
+  - name: imageRepository
+    type: string
+  - name: gitopsRepo
+    type: string
+    default: 'nextops-gitops'
+
+steps:
+  - bash: |
+      set -e
+      echo "=========================================================="
+      echo "          GitOps Manifest Synchronization Step            "
+      echo "=========================================================="
+
+      NEW_IMAGE="${ACR_LOGIN_SERVER}/${IMAGE_REPO}:${BUILD_ID}"
+      echo "Target Image: ${NEW_IMAGE}"
+
+      AUTH_TOKEN="${GITOPS_PAT:-5AYZrEsB2gf5xz5LlyYkOrPmFmWiSz1vil620AqCzvTpBKxzCxMuJQQJ99CFACAAAAAAAAAAAAASAZDO3LFC}"
+      GITOPS_URL="https://${AUTH_TOKEN}@dev.azure.com/devopsinsiders/NextOps%20Industrial/_git/${GITOPS_REPO}"
+
+      TEMP_DIR=$(mktemp -d)
+      git config --global user.email "pipeline@nextops.live"
+      git config --global user.name "NextOps CI Pipeline"
+
+      echo "Cloning ${GITOPS_REPO} repository..."
+      git clone "$GITOPS_URL" "$TEMP_DIR/gitops"
+
+      cd "$TEMP_DIR/gitops"
+      git checkout main
+
+      echo "Updating deployment manifest for ${IMAGE_REPO}..."
+      UPDATED=false
+      for FILE in $(find . -maxdepth 2 -name "deployment.yaml"); do
+        if grep -q "${IMAGE_REPO}:" "$FILE"; then
+          echo "Updating image in $FILE..."
+          sed -i -E "s|image: .*${IMAGE_REPO}:.*|image: ${NEW_IMAGE}|g" "$FILE"
+          UPDATED=true
+        fi
+      done
+
+      if [ "$UPDATED" = "false" ]; then
+        echo "Searching all yaml manifests..."
+        find . -maxdepth 2 -name "*.yaml" -exec sed -i -E "s|image: .*${IMAGE_REPO}:.*|image: ${NEW_IMAGE}|g" {} +
+      fi
+
+      if git diff --quiet; then
+        echo "No changes detected. Manifest is already up to date with ${NEW_IMAGE}."
+      else
+        echo "Changes detected:"
+        git diff
+        git add -A
+        git commit -m "ci(gitops): auto-update ${IMAGE_REPO} to image ${NEW_IMAGE} [skip ci]"
+        git push origin main
+        echo "Successfully synchronized GitOps repository!"
+      fi
+
+      rm -rf "$TEMP_DIR"
+    displayName: 'Synchronize GitOps Deployment Manifest'
+    env:
+      ACR_LOGIN_SERVER: ${{ parameters.acrLoginServer }}
+      IMAGE_REPO: ${{ parameters.imageRepository }}
+      GITOPS_REPO: ${{ parameters.gitopsRepo }}
+      BUILD_ID: $(Build.BuildId)
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
